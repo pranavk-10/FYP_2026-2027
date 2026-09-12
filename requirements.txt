@@ -1,0 +1,9 @@
+langchain>=1.0,<2.0
+langchain-core>=1.0,<2.0
+langgraph>=1.0,<2.0
+langchain-mistralai
+langchain-pinecone
+pinecone-client
+pydantic
+python-dotenv
+langchain-groq
