@@ -1,9 +1,13 @@
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_mistralai import ChatMistralAI
 from state import ModeratorVerdict
+from langchain_groq import ChatGroq
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Enforce structured output matching the ModeratorVerdict Pydantic schema
-llm = ChatMistralAI(model="open-mixtral-8x7b", temperature=0).with_structured_output(ModeratorVerdict)
+llm = ChatGroq(model_name="openai/gpt-oss-20b", temperature=0).with_structured_output(ModeratorVerdict)
 
 def moderator_node(state):
     current_round = state["current_round"]

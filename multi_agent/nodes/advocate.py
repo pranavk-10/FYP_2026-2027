@@ -1,7 +1,11 @@
 import json
+from dotenv import load_dotenv
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_groq import ChatGroq
 from state import DiagnosticState, clean_response
+from dotenv import load_dotenv
+
+load_dotenv()
 
 def advocate_node(state: DiagnosticState):
     print(f"\n--- Round {state['current_round']} : Advocate ---")

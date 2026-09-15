@@ -2,6 +2,9 @@ import json
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_groq import ChatGroq
 from state import DiagnosticState, clean_response
+from dotenv import load_dotenv
+
+load_dotenv()
 
 def skeptic_node(state: DiagnosticState):
     print("\n--- Skeptic ---")
