@@ -7,3 +7,13 @@ pinecone-client
 pydantic
 python-dotenv
 langchain-groq
+pypdf
+fontTools
+langchain-community
+torch
+torchvision
+pillow
+numpy
+fastapi
+uvicorn
+python-multipart

@@ -1,9 +1,17 @@
+import os
+import sys
+
+MULTI_AGENT_DIR = os.path.dirname(os.path.abspath(__file__))
+if MULTI_AGENT_DIR not in sys.path:
+    sys.path.insert(0, MULTI_AGENT_DIR)
+
 from langgraph.graph import StateGraph, START, END
 from state import DiagnosticState
 from nodes.advocate import advocate_node
 from nodes.skeptic import skeptic_node
 from nodes.evidence import evidence_checker_node
 from nodes.moderator import moderator_node
+
 
 def route_debate(state: DiagnosticState):
     if state.get("verdict").action == "finalize":
