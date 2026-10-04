@@ -36,13 +36,11 @@ _CACHED_MODEL = None
 _CACHED_DEVICE = None
 
 def get_default_weights_path():
-    """Returns absolute path to trained weights file for HAM10000 model."""
+    """Returns absolute path to trained weights file for skin lesion model."""
     base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     possible_paths = [
-        os.path.join(base_dir, "cnn_pipeline", "ham10000", "weights", "model_ham10000_best.pth"),
-        os.path.join(base_dir, "cnn_pipeline", "ham10000", "model_ham10000_best.pth"),
-        os.path.join(base_dir, "cnn_pipeline", "skin", "weights", "model_skin_best.pth"),
-        os.path.join(base_dir, "stuff", "model_ham10000_best.pth"),
+        os.path.join(base_dir, "cnn_pipeline", "skin", "weights", "model_ham10000_best.pth"),
+        os.path.join(base_dir, "cnn_pipeline", "skin", "model_ham10000_best.pth"),
         "model_ham10000_best.pth"
     ]
     for p in possible_paths:
@@ -51,9 +49,9 @@ def get_default_weights_path():
     return possible_paths[0]
 
 
-def load_ham10000_model(model_path=None, device=None):
+def load_skin_model(model_path=None, device=None):
     """
-    Singleton loader for ResNet18 HAM10000 Skin Lesion Model.
+    Singleton loader for ResNet18 Skin Lesion Model.
     Loads trained weights into memory once.
     """
     global _CACHED_MODEL, _CACHED_DEVICE
@@ -70,11 +68,11 @@ def load_ham10000_model(model_path=None, device=None):
         model_path = get_default_weights_path()
 
     if not os.path.exists(model_path):
-        raise FileNotFoundError(f"HAM10000 model weights file not found at: {model_path}")
+        raise FileNotFoundError(f"Skin lesion model weights file not found at: {model_path}")
 
     model = models.resnet18(weights=None)
     model.fc = nn.Linear(model.fc.in_features, len(CLASS_INDEX_TO_NAME))
-    
+
     checkpoint = torch.load(model_path, map_location=device, weights_only=False)
     if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
         model.load_state_dict(checkpoint["state_dict"])
@@ -93,12 +91,9 @@ def load_ham10000_model(model_path=None, device=None):
 
     return model, device
 
-# Backward compatible alias
-load_skin_model = load_ham10000_model
 
-
-def get_ham10000_transform():
-    """Returns PyTorch evaluation image transforms matching HAM10000 training."""
+def get_skin_transform():
+    """Returns PyTorch evaluation image transforms matching training."""
     return transforms.Compose([
         transforms.Resize((IMG_SIZE, IMG_SIZE)),
         transforms.ToTensor(),
@@ -106,9 +101,9 @@ def get_ham10000_transform():
     ])
 
 
-def predict_ham10000(image_input, model_path=None, device=None):
+def predict_skin(image_input, model_path=None, device=None):
     """
-    Runs HAM10000 dermoscopy image inference and returns standardized JSON evidence structure.
+    Runs skin lesion dermoscopy image inference and returns standardized JSON evidence structure.
 
     Args:
         image_input: Filepath (str/Path), PIL.Image object, or raw image bytes.
@@ -118,8 +113,8 @@ def predict_ham10000(image_input, model_path=None, device=None):
     Returns:
         Dict matching standardized DiagnosticState input schema.
     """
-    model, device = load_ham10000_model(model_path=model_path, device=device)
-    transform = get_ham10000_transform()
+    model, device = load_skin_model(model_path=model_path, device=device)
+    transform = get_skin_transform()
 
     # Handle flexible input types (filepath, PIL image, or bytes)
     if isinstance(image_input, (str, bytes, os.PathLike)):
@@ -226,14 +221,11 @@ def predict_ham10000(image_input, model_path=None, device=None):
         }
     }
 
-# Backward compatible alias
-predict_skin = predict_ham10000
-
 if __name__ == "__main__":
     import sys
     if len(sys.argv) > 1:
         test_file = sys.argv[1]
-        res = predict_ham10000(test_file)
+        res = predict_skin(test_file)
         print(json.dumps(res, indent=2))
     else:
-        print("HAM10000 inference module loaded successfully. Pass an image file to test.")
+        print("Skin inference module loaded successfully. Pass an image file to test.")

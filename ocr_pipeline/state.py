@@ -1,10 +1,19 @@
+"""
+OCR Pipeline State Models
+=========================
+Pydantic schemas for structured blood report extraction output.
+Used by both the OCR structurer (Groq) and the debate engine.
+"""
+
 from pydantic import BaseModel, Field
 from typing import List, Optional
+
 
 class BloodMarker(BaseModel):
     value: float = Field(description="The numerical value of the test result")
     unit: str = Field(description="The unit of measurement (e.g., g/dL, cells/mcL)")
     flag: str = Field(description="Strictly 'high', 'low', or 'normal' based on the reference range")
+
 
 class CBCReportJSON(BaseModel):
     hemoglobin: Optional[BloodMarker] = Field(None, description="Hemoglobin (Hb) levels")

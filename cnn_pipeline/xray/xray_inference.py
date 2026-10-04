@@ -247,9 +247,10 @@ def preprocess_xray_image(image_input):
     return img_batch
 
 
-def predict_xray(image_input, model_path=None, threshold=THRESHOLD):
+def predict_xray(image_input, model_path=None, threshold=THRESHOLD, watchlist_threshold=0.15):
     """
-    Runs Chest X-Ray image inference and returns standardized JSON evidence structure.
+    Runs Chest X-Ray image inference and returns standardized JSON evidence structure
+    with 3-tier risk stratification.
 
     This is the X-Ray equivalent of predict_ecg() — same output schema,
     different model (TensorFlow DenseNet121 instead of PyTorch ResNet18).
@@ -258,13 +259,19 @@ def predict_xray(image_input, model_path=None, threshold=THRESHOLD):
     - ECG is multi-CLASS (softmax, one winner) → 4 mutually exclusive classes
     - X-Ray is multi-LABEL (sigmoid, multiple winners) → 20 independent disease probabilities
 
+    Risk Tiers:
+    - DETECTED (>0.5): Strong positive — flag as diagnosed
+    - WATCHLIST (0.15–0.5): Borderline — "cannot rule out", needs clinical correlation
+    - UNLIKELY (<0.15): Low probability — probably normal for this condition
+
     Args:
         image_input: Filepath (str/Path), PIL.Image object, or raw image bytes.
         model_path: Optional path to .keras weights file.
-        threshold: Sigmoid threshold for detecting conditions (default 0.5).
+        threshold: Sigmoid threshold for "detected" tier (default 0.5).
+        watchlist_threshold: Lower threshold for "watchlist" tier (default 0.15).
 
     Returns:
-        Dict matching standardized DiagnosticState input schema.
+        Dict matching standardized DiagnosticState input schema with risk tiers.
     """
     model = load_xray_model(model_path=model_path)
     img_batch = preprocess_xray_image(image_input)
@@ -272,61 +279,134 @@ def predict_xray(image_input, model_path=None, threshold=THRESHOLD):
     # Run inference
     probabilities = model.predict(img_batch, verbose=0)[0]  # Shape: (20,)
 
-    # Build ranked differential (all 20 classes sorted by probability)
-    sorted_indices = np.argsort(probabilities)[::-1]
+    # =====================================================================
+    # SEPARATE "No Finding" from disease classes
+    # "No Finding" is at index 19 (last in LABEL_COLS) — treat it as a
+    # normality score, not as a competing disease
+    # =====================================================================
+    no_finding_idx = LABEL_COLS.index('No Finding')
+    normality_score = float(probabilities[no_finding_idx])
 
-    differential = [
+    # Build disease-only differential (exclude "No Finding")
+    disease_indices = [i for i in range(len(LABEL_COLS)) if i != no_finding_idx]
+    disease_probs = [(i, float(probabilities[i])) for i in disease_indices]
+    disease_probs.sort(key=lambda x: x[1], reverse=True)
+
+    # Classify each disease into risk tiers
+    detected = []     # > threshold (0.5)
+    watchlist = []     # watchlist_threshold to threshold (0.15 - 0.5)
+    unlikely = []      # < watchlist_threshold (0.15)
+
+    for idx, prob in disease_probs:
+        entry = {
+            "label": CLINICAL_LABEL_MAP[LABEL_COLS[idx]],
+            "raw_class": LABEL_COLS[idx],
+            "probability": prob,
+            "calibrated_probability": prob,
+        }
+        if prob >= threshold:
+            entry["risk_tier"] = "detected"
+            detected.append(entry)
+        elif prob >= watchlist_threshold:
+            entry["risk_tier"] = "watchlist"
+            watchlist.append(entry)
+        else:
+            entry["risk_tier"] = "unlikely"
+            unlikely.append(entry)
+
+    # Full ranked differential (all 20 classes including No Finding, for backward compatibility)
+    sorted_indices = np.argsort(probabilities)[::-1]
+    full_differential = [
         {
             "label": CLINICAL_LABEL_MAP[LABEL_COLS[idx]],
             "raw_class": LABEL_COLS[idx],
             "probability": float(probabilities[idx]),
             "calibrated_probability": float(probabilities[idx]),
-            "detected": bool(probabilities[idx] >= threshold)
+            "risk_tier": "detected" if probabilities[idx] >= threshold
+                         else "watchlist" if probabilities[idx] >= watchlist_threshold
+                         else "unlikely"
         }
         for idx in sorted_indices
     ]
 
-    # Identify detected conditions (above threshold)
-    detected_conditions = [d for d in differential if d["detected"]]
+    # Primary diagnosis: highest detected condition, or top watchlist, or No Finding
+    if detected:
+        primary = detected[0]
+        primary_diagnosis = primary["label"]
+        primary_class = primary["raw_class"]
+        primary_prob = primary["probability"]
+    elif watchlist:
+        # Nothing detected, but watchlist items exist — report top watchlist
+        primary = watchlist[0]
+        primary_diagnosis = f"{primary['label']} (watchlist — needs clinical correlation)"
+        primary_class = primary["raw_class"]
+        primary_prob = primary["probability"]
+    else:
+        # Everything is unlikely — normal scan
+        primary_diagnosis = "No Finding (Normal)"
+        primary_class = "No Finding"
+        primary_prob = normality_score
 
-    # Primary diagnosis is the highest-probability detected condition
-    # (or highest overall if nothing crosses threshold)
-    top = differential[0]
-
-    # Build clinical findings for debate agents
+    # =====================================================================
+    # BUILD CLINICAL EVIDENCE for debate agents
+    # =====================================================================
     positive_findings = []
     negative_findings = []
 
-    for d in detected_conditions:
+    # Detected conditions → strong positive findings
+    for d in detected:
         raw = d["raw_class"]
         if raw in CLINICAL_FINDINGS_MAP:
-            positive_findings.append(CLINICAL_FINDINGS_MAP[raw])
+            positive_findings.append(f"[DETECTED] {CLINICAL_FINDINGS_MAP[raw]}")
+
+    # Watchlist conditions → borderline findings (this is the key improvement)
+    for d in watchlist:
+        raw = d["raw_class"]
+        if raw in CLINICAL_FINDINGS_MAP:
+            positive_findings.append(
+                f"[WATCHLIST] Cannot rule out {d['label']} ({d['probability']:.1%}): "
+                f"{CLINICAL_FINDINGS_MAP[raw]}"
+            )
 
     if not positive_findings:
         positive_findings.append("No significant acute cardiopulmonary abnormality detected.")
 
-    # Add negative findings for high-probability conditions that were NOT detected
-    for d in differential:
-        if not d["detected"] and d["probability"] > 0.2:
-            negative_findings.append(
-                f"Possible {CLINICAL_LABEL_MAP[d['raw_class']]} (probability {d['probability']:.1%} below threshold)."
-            )
+    # Normality assessment
+    if normality_score > 0.4:
+        negative_findings.append(f"Normality score: {normality_score:.1%} — likely normal study.")
+    elif normality_score > 0.25:
+        negative_findings.append(f"Normality score: {normality_score:.1%} — borderline, clinical correlation advised.")
+    else:
+        negative_findings.append(f"Normality score: {normality_score:.1%} — abnormalities likely present.")
 
-    if not negative_findings:
-        negative_findings.append("No borderline conditions noted.")
+    if not detected and not watchlist:
+        negative_findings.append("All disease probabilities below watchlist threshold.")
 
     return {
         "modality": "xray",
         "input_type": "image",
         "prediction": {
-            "primary_diagnosis": top["label"],
-            "raw_class": top["raw_class"],
-            "probability": top["probability"],
-            "calibrated_probability": top["calibrated_probability"],
-            "findings": differential,
-            "detected_conditions": [d["label"] for d in detected_conditions] if detected_conditions else ["No Finding"]
+            "primary_diagnosis": primary_diagnosis,
+            "raw_class": primary_class,
+            "probability": primary_prob,
+            "calibrated_probability": primary_prob,
+            "normality_score": normality_score,
+            "findings": full_differential,
+            "detected_conditions": [d["label"] for d in detected] if detected else [],
+            "watchlist_conditions": [d["label"] for d in watchlist] if watchlist else [],
+            "risk_summary": {
+                "detected_count": len(detected),
+                "watchlist_count": len(watchlist),
+                "unlikely_count": len(unlikely),
+                "overall_risk": "high" if detected else "moderate" if watchlist else "low"
+            }
         },
-        "differential": differential,
+        "risk_tiers": {
+            "detected": detected,
+            "watchlist": watchlist,
+            "unlikely": unlikely[:5]  # Only top 5 unlikely (rest are noise)
+        },
+        "differential": full_differential,
         "evidence": {
             "positive_findings": positive_findings,
             "negative_findings": negative_findings

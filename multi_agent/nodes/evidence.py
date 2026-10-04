@@ -9,31 +9,38 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-def extract_clean_search_query(llm, latest_arguments):
+def extract_clean_search_query(llm, latest_arguments: str) -> str:
     """
-    Priority 2: Uses Groq to extract concise, clean medical search terms 
-    from the conversational debate history to maximize vector similarity matching.
+    Extracts concise, clean medical search terms from debate history
+    to maximize vector similarity matching in Pinecone.
     """
-    prompt = f"""
-    Extract the core medical diagnoses, symptoms, anatomical locations, and imaging signs 
-    from the following clinical debate text into a single, clean search query string. 
-    Omit conversational filler, agent names, and probability numbers.
-    
-    Text: {latest_arguments}
-    
-    Output ONLY the concise space-separated medical search terms.
-    """
+    prompt = (
+        "Extract 3 to 6 key medical search terms (diagnoses, symptoms, ECG findings, or radiological signs) "
+        "from the following text. Omit all conversational words, punctuation, numbers, and agent names.\n\n"
+        f"Text:\n{latest_arguments[:600]}\n\n"
+        "Output ONLY the space-separated medical keywords (e.g., 'myocardial infarction ST elevation pericarditis atelectasis'):"
+    )
     try:
         response = llm.invoke([HumanMessage(content=prompt)])
-        clean_terms = clean_response(response.content)
-        return clean_terms if len(clean_terms) > 3 else latest_arguments
+        clean_terms = clean_response(response.content).strip()
+        # Take the first line and remove markdown/bullets
+        clean_terms = clean_terms.replace("*", "").replace("-", "").replace("`", "").strip()
+        lines = [line.strip() for line in clean_terms.split("\n") if line.strip()]
+        first_line = lines[0] if lines else clean_terms
+        words = first_line.split()
+        if len(words) > 10:
+            first_line = " ".join(words[:8])
+        return first_line if len(first_line) > 3 else "myocardial infarction atelectasis"
     except Exception:
-        return latest_arguments
+        return "myocardial infarction atelectasis"
+
 
 def evidence_checker_node(state: DiagnosticState):
     print("\n--- Evidence-Checker (RAG) ---")
-    llm = ChatGroq(model_name="openai/gpt-oss-20b", temperature=0, max_tokens=600)
-    latest_arguments = "\n".join(state["debate_history"][-2:])
+    llm = ChatGroq(model_name="openai/gpt-oss-120b", temperature=0.1, max_tokens=600)
+    
+    debate_history = state.get("debate_history", [])
+    latest_arguments = "\n".join(debate_history[-2:]) if debate_history else ""
     
     search_query = extract_clean_search_query(llm, latest_arguments)
     print(f"Clean Extracted RAG Query: '{search_query}'")
@@ -66,18 +73,18 @@ def evidence_checker_node(state: DiagnosticState):
 
     system_prompt = f"""
     You are the Evidence-Checker in a Multidisciplinary Medical Team.
-    Cross-reference the claims made by the Advocate and Skeptic against the retrieved WHO Clinical Guidelines context below.
+    Evaluate the clinical claims made by the Advocate and Skeptic against the retrieved medical context below.
 
     <context>
     {retrieved_context}
     </context>
 
-    For each claim made in the debate:
-    1. State whether it is Supported, Refuted, or Unverified by the provided WHO context.
-    2. If Supported, include the exact document citation from the context (e.g., [WHO HEARTS CVD Management Package, Page 17]).
+    For each clinical claim:
+    1. Cross-reference against the context and established clinical standards (Supported, Refuted, or Inconclusive / Not in Guidelines).
+    2. Cite the specific guideline source if present (e.g., [WHO HEARTS CVD Management Package, Page 113]).
+    3. Note any red flags, diagnostic pitfalls, or mandatory confirmatory tests mentioned in the literature.
 
-    Output your response in a Markdown table.
-    IMPORTANT: Output your response directly. DO NOT use <think> tags or output internal reasoning.
+    Present your verification in a clear Markdown table.
     """
     response = llm.invoke([SystemMessage(content=system_prompt), HumanMessage(content=latest_arguments)])
     clean_text = clean_response(response.content)

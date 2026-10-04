@@ -3,14 +3,14 @@ from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.output_parsers import PydanticOutputParser
 
-# Corrected import
-from state import CBCReportJSON
+# Package-relative import (works when called from FastAPI or any external module)
+from .state import CBCReportJSON
 
 def structure_ocr_to_json(raw_markdown: str) -> dict:
     print("Structuring OCR markdown into JSON...")
     
     # Initialize the fast Groq model
-    llm = ChatGroq(model_name="openai/gpt-oss-20b", temperature=0, max_tokens=1000)
+    llm = ChatGroq(model_name="openai/gpt-oss-120b", temperature=0, max_tokens=1000)
     
     # Set up the Pydantic parser
     parser = PydanticOutputParser(pydantic_object=CBCReportJSON)
