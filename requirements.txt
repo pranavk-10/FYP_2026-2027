@@ -19,3 +19,8 @@ mistralai
 fastapi
 uvicorn
 python-multipart
+
+
+pytesseract 
+pillow
+pdf2image
