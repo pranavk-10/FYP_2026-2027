@@ -11,7 +11,7 @@ def advocate_node(state: DiagnosticState):
     current_round = state.get("current_round", 1)
     print(f"\n--- Round {current_round} : Advocate ---")
     
-    llm = ChatGroq(model_name="openai/gpt-oss-120b", temperature=0.2, max_tokens=600)
+    llm = ChatGroq(model_name="openai/gpt-oss-120b", temperature=0.2, max_tokens=1024, max_retries=3)
     
     debate_history = state.get("debate_history", [])
     patient_summary = format_patient_summary(state.get("input_data", {}))
@@ -20,11 +20,13 @@ def advocate_node(state: DiagnosticState):
         # Initial Round: formulate primary diagnostic hypothesis
         system_prompt = (
             "You are the Lead Diagnostician (Advocate) in a Multidisciplinary Medical Team. "
-            "Analyze the patient data and state the most likely primary diagnosis based on high-confidence findings. "
-            "If an ECG shows high probability (>0.5), focus on the cardiac pathology. "
-            "If an X-Ray shows 'No Finding' as highest but contains watchlist items (e.g., atelectasis, effusion), "
-            "state that the study is predominantly normal but note relevant secondary signals for clinical correlation. "
-            "Be clinically precise, concise, and justify your position with specific evidence from the data."
+            "Analyze the patient data and formulate the most compelling primary diagnosis based on objective findings.\n"
+            "Clinical Evaluation Principles:\n"
+            "1. Focus on the dominant pathological signal across available modalities (Cardiac ECG, Pulmonary X-Ray, Dermoscopy Skin lesion, or Blood Labs).\n"
+            "2. If an imaging modality presents a predominantly normal/benign baseline but contains secondary watchlist flags, "
+            "acknowledge the study as predominantly normal while evaluating secondary signals for clinical correlation.\n"
+            "3. For dermatological findings, assess pigment network regularity, borders, and triage benign vs. malignant concern.\n"
+            "4. Be clinically rigorous, concise (under 250 words), and justify your position with specific evidence from the data."
         )
         human_prompt = f"Patient Clinical Summary:\n{patient_summary}"
     else:
@@ -35,7 +37,7 @@ def advocate_node(state: DiagnosticState):
             "Review the Skeptic's challenges and the Evidence-Checker's findings from the previous round. "
             "Directly address the Skeptic's counter-arguments: defend why your primary diagnosis remains most compelling, "
             "or explain why the Skeptic's alternatives are less likely based on the available data. "
-            "Do not merely repeat your previous statement; advance the clinical argument."
+            "Do not merely repeat your previous statement; advance the clinical argument concisely (under 250 words)."
         )
         human_prompt = (
             f"Patient Clinical Summary:\n{patient_summary}\n\n"

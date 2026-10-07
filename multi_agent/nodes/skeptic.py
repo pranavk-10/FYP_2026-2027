@@ -8,7 +8,7 @@ load_dotenv()
 
 def skeptic_node(state: DiagnosticState):
     print("\n--- Skeptic ---")
-    llm = ChatGroq(model_name="openai/gpt-oss-120b", temperature=0.3, max_tokens=600)
+    llm = ChatGroq(model_name="openai/gpt-oss-120b", temperature=0.3, max_tokens=1024, max_retries=3)
     
     debate_history = state.get("debate_history", [])
     advocate_argument = debate_history[-1] if debate_history else ""

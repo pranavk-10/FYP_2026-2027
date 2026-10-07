@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Enforce structured output matching the ModeratorVerdict Pydantic schema
-llm = ChatGroq(model_name="openai/gpt-oss-120b", temperature=0, max_tokens=600).with_structured_output(ModeratorVerdict)
+llm = ChatGroq(model_name="openai/gpt-oss-120b", temperature=0, max_tokens=1024, max_retries=3).with_structured_output(ModeratorVerdict)
 
 def moderator_node(state):
     current_round = state["current_round"]
@@ -20,12 +20,13 @@ def moderator_node(state):
     
     CLINICAL DECISION RULES:
     1. Weigh objective findings by evidence strength:
-       - High calibrated probability (>0.70) backed by classic objective signs (e.g. ST-segment elevation on ECG) is strong positive diagnostic evidence.
-       - A normal chest radiograph (No Finding) in the setting of acute ST elevation supports an uncomplicated acute coronary syndrome by ruling out alternative catastrophic mimics (e.g. tension pneumothorax, widened mediastinum / aortic dissection).
+       - High calibrated probability (>0.70) backed by characteristic electrophysiological, radiological, or dermatological signs is strong positive evidence.
+       - A normal imaging study in one modality in the presence of acute pathology in another helps narrow the differential by ruling out gross anatomical mimics.
+       - For dermatological presentations: high confidence benign findings support observation, whereas malignant or dysplastic risk markers mandate biopsy / specialist dermatology referral.
     2. If the Advocate's diagnosis is overwhelmingly supported by the data and the Skeptic's counter-arguments are theoretical without clinical corroboration, declare the validated primary diagnosis as final_verdict and set action to 'finalize'.
     3. If there is genuine ambiguity, conflicting high-probability findings across modalities, or no diagnostic consensus at round {max_rounds}, set final_verdict to 'Refer to Specialist / Inconclusive' and action to 'finalize'.
     4. If further deliberation is required and current_round < max_rounds, set action to 'continue_debate'.
-    5. Provide an articulate audit_trail explaining the clinical rationale, which arguments prevailed, and any recommended next steps.
+    5. Provide an articulate audit_trail explaining the clinical rationale, which arguments prevailed, and recommended next steps.
     """
     
     human_prompt = f"""

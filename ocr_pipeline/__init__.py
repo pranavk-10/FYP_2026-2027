@@ -1,6 +1,20 @@
-# ocr_pipeline — Blood Report OCR + Structuring Pipeline
-# Uses Mistral OCR to extract text, then Groq LLM to structure into JSON
+"""
+Blood Report OCR + Structuring Pipeline Module
+Extracts text via Tesseract OCR / PDF parsers and structures Complete Blood Count (CBC) data via Groq LLM.
+"""
 
-from .ocr_pipeline import process_blood_report, process_blood_report_bytes
-from .ocr_structurer import structure_ocr_to_json
-from .state import CBCReportJSON, BloodMarker
+from .ocr_main import (
+    extract_text,
+    extract_text_from_bytes,
+    process_blood_report,
+    process_blood_report_bytes,
+)
+from .ocr_parser import extract_cbc_json
+
+__all__ = [
+    "extract_text",
+    "extract_text_from_bytes",
+    "process_blood_report",
+    "process_blood_report_bytes",
+    "extract_cbc_json",
+]

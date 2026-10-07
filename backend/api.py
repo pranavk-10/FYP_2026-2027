@@ -27,8 +27,8 @@ from cnn_pipeline.xray.xray_inference import predict_xray
 # Import Skin Lesion specialist inference pipeline (PyTorch ResNet18 — HAM10000)
 from cnn_pipeline.skin.skin_inference import predict_skin
 
-# Import OCR pipeline for blood report extraction (Mistral OCR → Groq structuring)
-from ocr_pipeline.ocr_pipeline import process_blood_report_bytes
+# Import OCR pipeline for blood report extraction (Tesseract OCR → Groq structuring)
+from ocr_pipeline.ocr_main import process_blood_report_bytes
 
 # Import compiled LangGraph MDT Debate graph
 from multi_agent.graph import app as debate_app
@@ -124,15 +124,14 @@ async def predict_xray_endpoint(file: UploadFile = File(...)):
 async def ocr_blood_report_endpoint(file: UploadFile = File(...)):
     """
     Upload a blood report (image or PDF) for OCR extraction.
-    Uses Mistral OCR to extract text, then Groq LLM to structure into
-    standardized JSON with hemoglobin, WBC, platelets, and abnormalities.
+    Uses Tesseract OCR to extract text, then Groq LLM (GPT-OSS series) with strict JSON schema
+    to structure CBC values, unit normalizations, and clinical abnormality flags.
     """
-    # Allow images and PDFs
-    allowed_types = ["image/jpeg", "image/png", "application/pdf"]
-    if file.content_type not in allowed_types:
+    allowed_types = ["image/jpeg", "image/png", "image/webp", "image/tiff", "application/pdf"]
+    if file.content_type not in allowed_types and not file.filename.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".tiff", ".pdf")):
         raise HTTPException(
             status_code=400,
-            detail=f"Uploaded file must be an image (JPG, PNG) or PDF. Got: {file.content_type}"
+            detail=f"Uploaded file must be an image (JPG, PNG, WEBP, TIFF) or PDF. Got: {file.content_type}"
         )
 
     try:
