@@ -1,7 +1,18 @@
+# Environment variables and secrets
 .env
-venv
+.env.*
+!.env.example
+
+# Python virtual environments
+.venv/
+.venv311/
+venv/
+venv311/
+
+# Python cache files
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
+
+# Local test files (exclude only if you don't want them in Git)
 test_ocr.py
 test_parser.py
