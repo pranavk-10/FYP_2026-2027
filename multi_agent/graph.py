@@ -14,7 +14,11 @@ from nodes.moderator import moderator_node
 
 
 def route_debate(state: DiagnosticState):
-    if state.get("verdict").action == "finalize":
+    verdict = state.get("verdict")
+    # Hard stop: the moderator increments current_round after each round, so once it
+    # exceeds max_rounds the debate ends even if the LLM asked to continue.
+    rounds_done = state.get("current_round", 1) > state.get("max_rounds", 2)
+    if verdict is None or verdict.action == "finalize" or rounds_done:
         return END
     return "advocate"
 

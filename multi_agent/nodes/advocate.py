@@ -2,7 +2,7 @@ import json
 from dotenv import load_dotenv
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_groq import ChatGroq
-from state import DiagnosticState, clean_response, format_patient_summary
+from state import DiagnosticState, clean_response, format_patient_summary, GROUNDING_RULE
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -22,11 +22,14 @@ def advocate_node(state: DiagnosticState):
             "You are the Lead Diagnostician (Advocate) in a Multidisciplinary Medical Team. "
             "Analyze the patient data and formulate the most compelling primary diagnosis based on objective findings.\n"
             "Clinical Evaluation Principles:\n"
-            "1. Focus on the dominant pathological signal across available modalities (Cardiac ECG, Pulmonary X-Ray, Dermoscopy Skin lesion, or Blood Labs).\n"
+            "1. Assess each available modality (Cardiac ECG, Pulmonary X-Ray, Dermoscopy Skin lesion, Blood Labs) on its own first, "
+            "then integrate them. Lead with the most clinically urgent finding, but state every other clinically relevant finding "
+            "and whether it is related to or independent of the lead finding. A lower probability in one modality is not a reason to drop it.\n"
             "2. If an imaging modality presents a predominantly normal/benign baseline but contains secondary watchlist flags, "
             "acknowledge the study as predominantly normal while evaluating secondary signals for clinical correlation.\n"
-            "3. For dermatological findings, assess pigment network regularity, borders, and triage benign vs. malignant concern.\n"
-            "4. Be clinically rigorous, concise (under 250 words), and justify your position with specific evidence from the data."
+            "3. For dermatological findings, triage benign vs. malignant concern from the predicted classes and their probabilities.\n"
+            "4. Be clinically rigorous, concise (under 250 words), and justify your position with specific evidence from the data.\n"
+            + GROUNDING_RULE
         )
         human_prompt = f"Patient Clinical Summary:\n{patient_summary}"
     else:
@@ -34,10 +37,11 @@ def advocate_node(state: DiagnosticState):
         prior_context = "\n".join(debate_history[-3:])
         system_prompt = (
             "You are the Lead Diagnostician (Advocate). "
-            "Review the Skeptic's challenges and the Evidence-Checker's findings from the previous round. "
-            "Directly address the Skeptic's counter-arguments: defend why your primary diagnosis remains most compelling, "
-            "or explain why the Skeptic's alternatives are less likely based on the available data. "
-            "Do not merely repeat your previous statement; advance the clinical argument concisely (under 250 words)."
+            "Review the Skeptic's challenges, the Evidence-Checker's findings and the Moderator's notes from the previous round. "
+            "Directly address the Skeptic's counter-arguments and any open question the Moderator raised: defend why your "
+            "primary diagnosis remains most compelling, or explain why the Skeptic's alternatives are less likely based on the available data. "
+            "Do not merely repeat your previous statement; advance the clinical argument concisely (under 250 words).\n"
+            + GROUNDING_RULE
         )
         human_prompt = (
             f"Patient Clinical Summary:\n{patient_summary}\n\n"

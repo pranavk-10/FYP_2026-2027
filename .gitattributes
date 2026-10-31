@@ -1,1 +1,2 @@
 cnn_pipeline/skin/weights/model_ham10000_upgraded.pth filter=lfs diff=lfs merge=lfs -text
+cnn_pipeline/ecg/weights/ecg_convnext_v3_deploy.pth filter=lfs diff=lfs merge=lfs -text

@@ -40,7 +40,7 @@ if __name__ == "__main__":
     # If an image path argument is passed (e.g. python main.py <path_to_image>), run predict_ecg first!
     if len(sys.argv) > 1 and os.path.exists(sys.argv[1]):
         image_path = sys.argv[1]
-        print(f"Running ResNet18 ECG Model on image: {image_path}")
+        print(f"Running ConvNeXt-Tiny (v3) ECG Model on image: {image_path}")
         input_data = predict_ecg(image_path)
     else:
         # Default sample X-Ray dictionary fallback for quick testing

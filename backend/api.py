@@ -3,8 +3,15 @@ import sys
 import io
 import json
 import tempfile
+
+# Force UTF-8 stdout/stderr on Windows to prevent charmap UnicodeEncodeErrors
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
 from typing import Optional, Dict, Any, List
-from fastapi import FastAPI, UploadFile, File, HTTPException, Form
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -18,7 +25,7 @@ if MULTI_AGENT_DIR not in sys.path:
     sys.path.insert(0, MULTI_AGENT_DIR)
 
 
-# Import ECG specialist inference pipeline (PyTorch ResNet18)
+# Import ECG specialist inference pipeline (PyTorch ConvNeXt-Tiny v3)
 from cnn_pipeline.ecg.ecg_inference import predict_ecg
 
 # Import X-Ray specialist inference pipeline (TensorFlow DenseNet121 — Ojas's model)
@@ -79,18 +86,19 @@ def root():
     }
 
 @app.post("/api/predict/ecg")
-async def predict_ecg_endpoint(file: UploadFile = File(...)):
+async def predict_ecg_endpoint(file: UploadFile = File(...), gradcam: bool = Query(False)):
     """
     Direct image upload endpoint for ECG printouts/scans.
-    Runs ResNet18 model using trained weights (model_ecg_image_best.pth) in RAM.
-    Returns standardized JSON evidence packet.
+    Runs ConvNeXt-Tiny (v3) model using trained weights (ecg_convnext_v3_deploy.pth) in RAM.
+    Returns standardized JSON evidence packet with multi-label probabilities and risk tiers.
+    Pass ?gradcam=true to include a Grad-CAM spatial attention heatmap.
     """
     if not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Uploaded file must be an image (JPG, PNG, etc.).")
 
     try:
         contents = await file.read()
-        prediction_json = predict_ecg(contents)
+        prediction_json = predict_ecg(contents, gradcam=gradcam)
         return {
             "status": "success",
             "filename": file.filename,
@@ -185,10 +193,10 @@ def run_debate_endpoint(payload: DebateRequestPayload):
         raise HTTPException(status_code=500, detail=f"Debate Engine Error: {str(e)}")
 
 @app.post("/api/analyze/ecg")
-async def analyze_ecg_end_to_end(file: UploadFile = File(...), max_rounds: int = Form(2)):
+async def analyze_ecg_end_to_end(file: UploadFile = File(...), max_rounds: int = Form(2), gradcam: bool = Form(False)):
     """
     Combined End-to-End Endpoint:
-    Upload ECG Image -> ResNet18 Inference -> LangGraph Debate -> Final Verdict.
+    Upload ECG Image -> ConvNeXt-Tiny (v3) Inference -> LangGraph Debate -> Final Verdict.
     """
     if not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Uploaded file must be an image.")
@@ -196,7 +204,7 @@ async def analyze_ecg_end_to_end(file: UploadFile = File(...), max_rounds: int =
     try:
         # Step 1: Run ECG CNN Model
         contents = await file.read()
-        ecg_json = predict_ecg(contents)
+        ecg_json = predict_ecg(contents, gradcam=gradcam)
 
         # Step 2: Seed LangGraph State
         initial_state = {
@@ -337,7 +345,8 @@ async def analyze_multimodal(
     xray_file: Optional[UploadFile] = File(None),
     skin_file: Optional[UploadFile] = File(None),
     blood_report_file: Optional[UploadFile] = File(None),
-    max_rounds: int = Form(2)
+    max_rounds: int = Form(2),
+    gradcam: bool = Form(False)
 ):
     """
     Multimodal End-to-End Endpoint:
@@ -359,7 +368,7 @@ async def analyze_multimodal(
             if not ecg_file.content_type.startswith("image/"):
                 raise HTTPException(status_code=400, detail="ECG file must be an image.")
             ecg_contents = await ecg_file.read()
-            ecg_json = predict_ecg(ecg_contents)
+            ecg_json = predict_ecg(ecg_contents, gradcam=gradcam)
             modality_results["ecg"] = ecg_json
 
         # Run X-Ray CNN if X-Ray image was uploaded

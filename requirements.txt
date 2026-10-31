@@ -12,8 +12,10 @@ fontTools
 langchain-community
 torch
 torchvision
+timm
 pillow
 numpy
+scipy
 tensorflow-cpu
 mistralai
 fastapi

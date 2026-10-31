@@ -4,10 +4,63 @@ from langchain_pinecone import PineconeVectorStore
 from langchain_mistralai import MistralAIEmbeddings
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_groq import ChatGroq
-from state import DiagnosticState, clean_response
+from state import DiagnosticState, clean_response, GROUNDING_RULE
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# CNN modality names -> Pinecone "modality" metadata values
+MODALITY_ALIASES = {"ecg": "ecg", "xray": "xray", "chest_xray": "xray",
+                    "dermoscopy": "skin", "skin_lesion": "skin", "skin": "skin"}
+CONTEXT_CHAR_LIMIT = 1200          # single-modality context budget
+MULTIMODAL_CHAR_PER_MODALITY = 700  # per-modality budget when several modalities are present
+
+
+def target_modalities(input_data: dict) -> list:
+    """Guideline modalities to search: one per imaging modality in the case (multimodal aware)."""
+    modalities = input_data.get("modalities")
+    if isinstance(modalities, dict) and modalities:
+        raw = [name for name in modalities if name != "lab_values"]
+    else:
+        raw = [input_data.get("modality", "xray")]
+    targets = []
+    for name in raw:
+        mapped = MODALITY_ALIASES.get(str(name).lower())
+        if mapped and mapped not in targets:
+            targets.append(mapped)
+    return targets
+
+
+def _format_docs(docs, char_budget: int, label: str = None) -> list:
+    """Formats retrieved chunks with source citations, capped at char_budget characters."""
+    blocks, total = [], 0
+    for d in docs:
+        content = d.page_content.strip()
+        if total + len(content) > char_budget:
+            content = content[:max(0, char_budget - total)] + "..."
+        doc_title = d.metadata.get("document_title", "WHO Clinical Guidelines")
+        page_num = d.metadata.get("page_number", "N/A")
+        prefix = f"{label.upper()} | " if label else ""
+        blocks.append(f"[{prefix}{doc_title}, Page {page_num}]:\n{content}")
+        total += len(content)
+        if total >= char_budget:
+            break
+    return blocks
+
+
+def build_retrieved_context(vector_store, search_query: str, modalities: list) -> str:
+    """Retrieves guideline passages separately for each modality so multimodal cases get each one's guidelines."""
+    if not modalities:
+        docs = vector_store.as_retriever(search_kwargs={"k": 3}).invoke(search_query)
+        return "\n\n".join(_format_docs(docs, CONTEXT_CHAR_LIMIT))
+    single = len(modalities) == 1
+    k = 3 if single else 2
+    budget = CONTEXT_CHAR_LIMIT if single else MULTIMODAL_CHAR_PER_MODALITY
+    blocks = []
+    for modality in modalities:
+        docs = vector_store.as_retriever(search_kwargs={"k": k, "filter": {"modality": modality}}).invoke(search_query)
+        blocks.extend(_format_docs(docs, budget, label=None if single else modality))
+    return "\n\n".join(blocks)
 
 def extract_clean_search_query(latest_arguments: str) -> str:
     """
@@ -50,42 +103,15 @@ def evidence_checker_node(state: DiagnosticState):
     print(f"Clean Extracted RAG Query: '{search_query}'")
 
     input_data = state.get("input_data", {})
-    raw_modality = input_data.get("modality", "xray").lower()
-    
-    # Normalize skin/dermoscopy to match Pinecone metadata
-    if raw_modality in ["dermoscopy", "skin_lesion", "skin"]:
-        active_modality = "skin"
-    else:
-        active_modality = raw_modality
-
-    filter_dict = {"modality": active_modality} if active_modality in ["ecg", "xray", "skin"] else None
+    modalities = target_modalities(input_data)
+    print(f"Guideline modalities searched: {modalities or 'all'}")
 
     try:
         embeddings = MistralAIEmbeddings(model="mistral-embed")
         pc = Pinecone(api_key=os.environ.get("PINECONE_API_KEY"))
         vector_store = PineconeVectorStore(index=pc.Index("medical-knowledge-base"), embedding=embeddings)
-        
-        search_kwargs = {"k": 3}
-        if filter_dict:
-            search_kwargs["filter"] = filter_dict
-
-        docs = vector_store.as_retriever(search_kwargs=search_kwargs).invoke(search_query)
-
-        # Smart context windowing: cap context at 1200 characters to prevent token exhaustion
-        context_blocks = []
-        total_chars = 0
-        for d in docs:
-            content = d.page_content.strip()
-            if total_chars + len(content) > 1200:
-                content = content[:max(0, 1200 - total_chars)] + "..."
-            doc_title = d.metadata.get("document_title", "WHO Clinical Guidelines")
-            page_num = d.metadata.get("page_number", "N/A")
-            context_blocks.append(f"[{doc_title}, Page {page_num}]:\n{content}")
-            total_chars += len(content)
-            if total_chars >= 1200:
-                break
-            
-        retrieved_context = "\n\n".join(context_blocks)
+        # Context is capped per modality to prevent token exhaustion
+        retrieved_context = build_retrieved_context(vector_store, search_query, modalities)
     except Exception as e:
         print(f"(Vector DB skipped/error: {e})")
         retrieved_context = "No retrieved evidence available for testing."
@@ -103,6 +129,10 @@ def evidence_checker_node(state: DiagnosticState):
     2. Cross-reference each claim against the context and established clinical standards (Supported, Refuted, or Inconclusive / Not in Guidelines).
     3. Cite specific guideline source if present (e.g., [WHO HEARTS CVD Management Package, Page 113]).
     4. Keep evaluations concise and complete so the table closes properly without truncation.
+    5. If a claim describes an image feature (ECG wave or lead, lesion border or pigment pattern, X-ray location)
+       that the CNN models did not report, mark it "Unsupported by model output".
+
+    {GROUNDING_RULE}
 
     Present your verification in a clean Markdown table (Claim | Origin | Evidence Assessment | Guideline Source | Key Takeaway).
     """
