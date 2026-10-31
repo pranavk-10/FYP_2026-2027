@@ -91,11 +91,12 @@ _CACHED_MODEL = None
 
 def get_default_weights_path():
     """Returns absolute path to trained .keras weights file."""
-    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) if '__file__' in globals() else os.getcwd()
     possible_paths = [
-        os.path.join(base_dir, "cnn_pipeline", "xray", "weights", "best_phase1_model.keras"),
+        "/content/densenet121_uncompressed.keras",
+        os.path.join(base_dir, "cnn_pipeline", "xray", "weights", "densenet121_uncompressed.keras"),
         os.path.join(base_dir, "stuff", "xray", "best_phase1_model-2.keras"),
-        "best_phase1_model.keras"
+        "densenet121_uncompressed.keras"
     ]
     for p in possible_paths:
         if os.path.exists(p):
@@ -107,11 +108,6 @@ def load_xray_model(model_path=None):
     """
     Singleton loader for DenseNet121 X-Ray Model (TensorFlow/Keras).
     Loads trained .keras weights into memory once.
-    
-    COMPATIBILITY FIX: Ojas's model was saved on Google Colab with a Keras version
-    that includes 'quantization_config' in Dense layer configs. Our local Keras
-    may not recognize this field. We strip it before loading to avoid the error:
-    "Unrecognized keyword arguments passed to Dense: {'quantization_config': None}"
     """
     global _CACHED_MODEL
 
@@ -144,25 +140,16 @@ def _load_model_with_compat_fix(model_path):
     """
     Loads a .keras model file while stripping unsupported fields 
     (e.g., 'quantization_config') that were added in newer Keras versions.
-    
-    The .keras format is a ZIP file containing:
-      - config.json (model architecture)
-      - model.weights.h5 (weights)
-    
-    We extract config.json, strip the incompatible field, 
-    rebuild the model from config, then load the weights separately.
     """
     import zipfile
     import tempfile
     import shutil
     
-    # Extract the .keras zip to a temp directory
     temp_dir = tempfile.mkdtemp()
     try:
         with zipfile.ZipFile(model_path, 'r') as zf:
             zf.extractall(temp_dir)
         
-        # Read and patch config.json to remove 'quantization_config'
         config_path = os.path.join(temp_dir, 'config.json')
         with open(config_path, 'r') as f:
             config_str = f.read()
@@ -170,11 +157,9 @@ def _load_model_with_compat_fix(model_path):
         config = json.loads(config_str)
         _strip_quantization_config(config)
         
-        # Write patched config back
         with open(config_path, 'w') as f:
             json.dump(config, f)
         
-        # Repackage into a patched .keras zip file
         patched_path = os.path.join(temp_dir, 'patched_model.keras')
         with zipfile.ZipFile(patched_path, 'w', zipfile.ZIP_DEFLATED) as zf_out:
             for root, dirs, files in os.walk(temp_dir):
@@ -185,7 +170,6 @@ def _load_model_with_compat_fix(model_path):
                     arcname = os.path.relpath(full_path, temp_dir)
                     zf_out.write(full_path, arcname)
         
-        # Load the patched model
         model = tf.keras.models.load_model(patched_path, compile=False)
         print("Model loaded successfully with compatibility fix applied.")
         return model
@@ -206,30 +190,29 @@ def _strip_quantization_config(obj):
 
 def preprocess_xray_image(image_input):
     """
-    Preprocesses input image to match Ojas's exact training pipeline:
-    1. Load/decode as grayscale
-    2. Resize to 224x224
-    3. Normalize to [0, 1] (/255.0)
-    4. Convert grayscale to RGB (3 channels for DenseNet)
-    5. Add batch dimension
-
-    Args:
-        image_input: Filepath (str), PIL.Image, or raw image bytes.
-
-    Returns:
-        numpy array of shape (1, 224, 224, 3) ready for model.predict()
+    Preprocesses input image to match training pipeline:
+    1. Load/decode image
+    2. Convert to grayscale
+    3. Resize to 224x224 (Bilinear)
+    4. Normalize to [0, 1] (/255.0)
+    5. Convert to 3 identical RGB channels for DenseNet
+    6. Add batch dimension
     """
-    # Handle flexible input types (same interface as ECG module)
     if isinstance(image_input, bytes):
         img = Image.open(io.BytesIO(image_input))
     elif isinstance(image_input, (str, os.PathLike)):
         img = Image.open(image_input)
     elif isinstance(image_input, Image.Image):
         img = image_input
+    elif isinstance(image_input, np.ndarray):
+        if image_input.dtype != np.uint8 and image_input.max() <= 1.0:
+            img = Image.fromarray((image_input * 255).astype(np.uint8))
+        else:
+            img = Image.fromarray(image_input.astype(np.uint8))
     else:
-        raise ValueError("image_input must be a file path, PIL.Image, or bytes.")
+        raise ValueError("image_input must be a file path, PIL.Image, bytes, or numpy array.")
 
-    # Convert to grayscale first (matching Ojas's decode_png channels=1)
+    # Convert to grayscale
     img = img.convert('L')
 
     # Resize to 224x224
@@ -238,7 +221,7 @@ def preprocess_xray_image(image_input):
     # Convert to numpy and normalize to [0, 1]
     img_array = np.array(img, dtype=np.float32) / 255.0
 
-    # Convert grayscale to RGB (matching Ojas's grayscale_to_rgb)
+    # Convert grayscale to RGB (3 channels for DenseNet)
     img_rgb = np.stack([img_array, img_array, img_array], axis=-1)
 
     # Add batch dimension: (1, 224, 224, 3)
@@ -251,56 +234,42 @@ def predict_xray(image_input, model_path=None, threshold=THRESHOLD, watchlist_th
     """
     Runs Chest X-Ray image inference and returns standardized JSON evidence structure
     with 3-tier risk stratification.
-
-    This is the X-Ray equivalent of predict_ecg() — same output schema,
-    different model (TensorFlow DenseNet121 instead of PyTorch ResNet18).
-
-    Key difference from ECG:
-    - ECG is multi-CLASS (softmax, one winner) → 4 mutually exclusive classes
-    - X-Ray is multi-LABEL (sigmoid, multiple winners) → 20 independent disease probabilities
-
-    Risk Tiers:
-    - DETECTED (>0.5): Strong positive — flag as diagnosed
-    - WATCHLIST (0.15–0.5): Borderline — "cannot rule out", needs clinical correlation
-    - UNLIKELY (<0.15): Low probability — probably normal for this condition
-
-    Args:
-        image_input: Filepath (str/Path), PIL.Image object, or raw image bytes.
-        model_path: Optional path to .keras weights file.
-        threshold: Sigmoid threshold for "detected" tier (default 0.5).
-        watchlist_threshold: Lower threshold for "watchlist" tier (default 0.15).
-
-    Returns:
-        Dict matching standardized DiagnosticState input schema with risk tiers.
     """
     model = load_xray_model(model_path=model_path)
     img_batch = preprocess_xray_image(image_input)
 
     # Run inference
-    probabilities = model.predict(img_batch, verbose=0)[0]  # Shape: (20,)
+    probabilities = model.predict(img_batch, verbose=0)[0]  # Shape: (20,) or (19,)
 
-    # =====================================================================
-    # SEPARATE "No Finding" from disease classes
-    # "No Finding" is at index 19 (last in LABEL_COLS) — treat it as a
-    # normality score, not as a competing disease
-    # =====================================================================
-    no_finding_idx = LABEL_COLS.index('No Finding')
-    normality_score = float(probabilities[no_finding_idx])
+    # Determine whether model outputs 19 disease classes or 20 classes (with 'No Finding')
+    num_classes = len(probabilities)
+    if num_classes == 19:
+        active_labels = [c for c in LABEL_COLS if c != 'No Finding']
+        normality_score = float(np.prod(1.0 - probabilities))
+        disease_indices = list(range(19))
+    else:
+        active_labels = LABEL_COLS
+        no_finding_idx = active_labels.index('No Finding') if 'No Finding' in active_labels else -1
+        if no_finding_idx != -1:
+            normality_score = float(probabilities[no_finding_idx])
+            disease_indices = [i for i in range(num_classes) if i != no_finding_idx]
+        else:
+            normality_score = float(np.prod(1.0 - probabilities))
+            disease_indices = list(range(num_classes))
 
-    # Build disease-only differential (exclude "No Finding")
-    disease_indices = [i for i in range(len(LABEL_COLS)) if i != no_finding_idx]
+    # Build disease differential
     disease_probs = [(i, float(probabilities[i])) for i in disease_indices]
     disease_probs.sort(key=lambda x: x[1], reverse=True)
 
     # Classify each disease into risk tiers
     detected = []     # > threshold (0.5)
-    watchlist = []     # watchlist_threshold to threshold (0.15 - 0.5)
-    unlikely = []      # < watchlist_threshold (0.15)
+    watchlist = []    # watchlist_threshold to threshold (0.15 - 0.5)
+    unlikely = []     # < watchlist_threshold (0.15)
 
     for idx, prob in disease_probs:
         entry = {
-            "label": CLINICAL_LABEL_MAP[LABEL_COLS[idx]],
-            "raw_class": LABEL_COLS[idx],
+            "label": CLINICAL_LABEL_MAP[active_labels[idx]],
+            "raw_class": active_labels[idx],
             "probability": prob,
             "calibrated_probability": prob,
         }
@@ -314,12 +283,12 @@ def predict_xray(image_input, model_path=None, threshold=THRESHOLD, watchlist_th
             entry["risk_tier"] = "unlikely"
             unlikely.append(entry)
 
-    # Full ranked differential (all 20 classes including No Finding, for backward compatibility)
+    # Full ranked differential
     sorted_indices = np.argsort(probabilities)[::-1]
     full_differential = [
         {
-            "label": CLINICAL_LABEL_MAP[LABEL_COLS[idx]],
-            "raw_class": LABEL_COLS[idx],
+            "label": CLINICAL_LABEL_MAP[active_labels[idx]],
+            "raw_class": active_labels[idx],
             "probability": float(probabilities[idx]),
             "calibrated_probability": float(probabilities[idx]),
             "risk_tier": "detected" if probabilities[idx] >= threshold
@@ -336,30 +305,24 @@ def predict_xray(image_input, model_path=None, threshold=THRESHOLD, watchlist_th
         primary_class = primary["raw_class"]
         primary_prob = primary["probability"]
     elif watchlist:
-        # Nothing detected, but watchlist items exist — report top watchlist
         primary = watchlist[0]
         primary_diagnosis = f"{primary['label']} (watchlist — needs clinical correlation)"
         primary_class = primary["raw_class"]
         primary_prob = primary["probability"]
     else:
-        # Everything is unlikely — normal scan
         primary_diagnosis = "No Finding (Normal)"
         primary_class = "No Finding"
         primary_prob = normality_score
 
-    # =====================================================================
-    # BUILD CLINICAL EVIDENCE for debate agents
-    # =====================================================================
+    # Clinical findings for debate agents
     positive_findings = []
     negative_findings = []
 
-    # Detected conditions → strong positive findings
     for d in detected:
         raw = d["raw_class"]
         if raw in CLINICAL_FINDINGS_MAP:
             positive_findings.append(f"[DETECTED] {CLINICAL_FINDINGS_MAP[raw]}")
 
-    # Watchlist conditions → borderline findings (this is the key improvement)
     for d in watchlist:
         raw = d["raw_class"]
         if raw in CLINICAL_FINDINGS_MAP:
@@ -371,7 +334,6 @@ def predict_xray(image_input, model_path=None, threshold=THRESHOLD, watchlist_th
     if not positive_findings:
         positive_findings.append("No significant acute cardiopulmonary abnormality detected.")
 
-    # Normality assessment
     if normality_score > 0.4:
         negative_findings.append(f"Normality score: {normality_score:.1%} — likely normal study.")
     elif normality_score > 0.25:
@@ -404,7 +366,7 @@ def predict_xray(image_input, model_path=None, threshold=THRESHOLD, watchlist_th
         "risk_tiers": {
             "detected": detected,
             "watchlist": watchlist,
-            "unlikely": unlikely[:5]  # Only top 5 unlikely (rest are noise)
+            "unlikely": unlikely[:5]
         },
         "differential": full_differential,
         "evidence": {
