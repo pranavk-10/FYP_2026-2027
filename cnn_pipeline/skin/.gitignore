@@ -4,6 +4,5 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 results/
-weights/model_ham10000_upgraded*.pth
 weights/*.calibration.json
 weights/calibration_temperature.json
