@@ -7,7 +7,6 @@ and resume capability.
 """
 
 import os
-import sys
 import argparse
 import urllib.request
 import concurrent.futures
@@ -20,7 +19,7 @@ HARVARD_DATAVERSE_META_URL = "https://dataverse.harvard.edu/api/access/datafile/
 
 
 def get_default_data_dir():
-    base_dir = os.path.dirname(os.path.abspath(__file__))
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base_dir, "data")
 
 
@@ -74,8 +73,14 @@ def download_single_image(file_info):
 
     for attempt in range(3):
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp, open(local_path, "wb") as out_f:
+            # Atomic replacement prevents interrupted files being mistaken for complete downloads.
+            partial_path = local_path + '.part'
+            with urllib.request.urlopen(req, timeout=30) as resp, open(partial_path, "wb") as out_f:
                 out_f.write(resp.read())
+            from PIL import Image
+            with Image.open(partial_path) as image:
+                image.verify()
+            os.replace(partial_path, local_path)
             return True, local_path
         except Exception:
             if attempt == 2:
@@ -95,6 +100,8 @@ def download_images(dest_dir=None, max_images=None, stratified=False, max_worker
     """
     if dest_dir is None:
         dest_dir = get_default_data_dir()
+    if (max_images is not None and max_images < 1) or max_workers < 1:
+        raise ValueError('max_images and max_workers must be positive.')
     
     meta_path = download_metadata(dest_dir=dest_dir)
     df = pd.read_csv(meta_path)
@@ -110,7 +117,7 @@ def download_images(dest_dir=None, max_images=None, stratified=False, max_worker
     # Build selection list
     if max_images is not None and max_images < len(df):
         if stratified:
-            samples_per_class = max(1, max_images // len(df['dx'].unique()))
+            samples_per_class = max_images // len(df['dx'].unique())
             selected_dfs = []
             for _, group in df.groupby('dx'):
                 selected_dfs.append(group.sample(min(len(group), samples_per_class), random_state=42))

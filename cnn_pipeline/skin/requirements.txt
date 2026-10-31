@@ -1,0 +1,12 @@
+# Research pipeline dependencies, independent of the larger application stack.
+torch>=2.2
+torchvision>=0.17
+Pillow>=10
+numpy>=1.26
+pandas>=2.1
+scikit-learn>=1.4
+scipy>=1.11
+matplotlib>=3.8
+# Used only by the existing dataset downloader.
+tqdm>=4.66
+huggingface-hub>=0.23
