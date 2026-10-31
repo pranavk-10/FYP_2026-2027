@@ -5,4 +5,3 @@ __pycache__/
 .pytest_cache/
 results/
 weights/*.calibration.json
-weights/calibration_temperature.json
