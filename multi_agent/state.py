@@ -128,12 +128,14 @@ def format_patient_summary(input_data: Dict[str, Any]) -> str:
 class ModeratorVerdict(BaseModel):
     final_verdict: str = Field(description="The validated primary diagnosis or 'Refer to Specialist / Inconclusive'")
     confidence_score: float = Field(description="Final calibrated confidence score between 0.0 and 1.0")
-    audit_trail: str = Field(description="Explanation of why this diagnosis was chosen")
+    audit_trail: str = Field(description="Explanation of why this diagnosis was chosen and the next steps. "
+                                         "At most 120 words.")
     action: str = Field(description="'finalize' if consensus/max rounds reached, else 'continue_debate'")
     secondary_findings: List[str] = Field(
         default_factory=list,
-        description="Every other clinically relevant finding, one per item, as 'MODALITY: finding (probability) - "
-                    "recommended follow-up'. Include findings from modalities not used for the final_verdict.")
+        description="Other clinically relevant findings, at most 4, one per item, each under 25 words, as "
+                    "'MODALITY: finding (probability) - recommended follow-up'. Include findings from modalities "
+                    "not used for the final_verdict.")
 
 class DiagnosticState(TypedDict):
     input_data: Dict[str, Any]

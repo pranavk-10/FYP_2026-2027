@@ -5,8 +5,36 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Enforce structured output matching the ModeratorVerdict Pydantic schema
-llm = ChatGroq(model_name="openai/gpt-oss-120b", temperature=0, max_tokens=1024, max_retries=3).with_structured_output(ModeratorVerdict)
+# Enforce structured output matching the ModeratorVerdict Pydantic schema.
+# gpt-oss also spends hidden reasoning tokens from max_tokens; 1024 was too small for multimodal
+# verdicts and cut the JSON off (Groq 400 'tool_use_failed').
+llm = ChatGroq(model_name="openai/gpt-oss-120b", temperature=0, max_tokens=2048, max_retries=3).with_structured_output(ModeratorVerdict)
+
+SHORTER = ("Your previous answer was cut off or was not valid JSON. Answer again with a shorter verdict: "
+           "audit_trail at most 80 words and at most 3 secondary_findings.")
+
+
+def _invoke_verdict(messages, input_data, current_round):
+    """Call the moderator LLM; on an invalid or truncated answer retry once with a request to be
+    shorter, then fall back to a referral instead of failing the whole request."""
+    try:
+        return llm.invoke(messages)
+    except Exception as first_error:
+        print(f"[Moderator] invalid structured output, retrying shorter: {str(first_error)[:200]}")
+    try:
+        return llm.invoke(messages + [HumanMessage(content=SHORTER)])
+    except Exception as second_error:
+        print(f"[Moderator] retry failed, falling back to referral: {str(second_error)[:200]}")
+    top = sorted(_model_findings(input_data), key=lambda f: -f[1])[:4]
+    return ModeratorVerdict(
+        final_verdict="Refer to Specialist / Inconclusive",
+        confidence_score=0.0,
+        audit_trail=(f"[System: the moderator could not produce a valid verdict in round {current_round}; "
+                     "the case is referred to a specialist. The model findings below are shown unreviewed.]"),
+        action="finalize",
+        secondary_findings=[f"{mod.upper()}: {label} ({p:.2f}) - review by a specialist" for label, p, mod in top],
+    )
+
 
 def _model_findings(input_data):
     """(label, calibrated probability, modality) for every CNN finding in single or multimodal input."""
@@ -90,7 +118,8 @@ def moderator_node(state):
     {chr(10).join(state['debate_history'])}
     """
     
-    verdict = llm.invoke([SystemMessage(content=system_prompt), HumanMessage(content=human_prompt)])
+    verdict = _invoke_verdict([SystemMessage(content=system_prompt), HumanMessage(content=human_prompt)],
+                              state.get("input_data", {}), current_round)
 
     # Enforce rule 3 in code: at the last round the debate must end. If the LLM still asks to
     # continue, there is no consensus, so the case is referred instead of looping.
